@@ -268,3 +268,128 @@ print(resp.response["output"][0]["content"][0]["text"])
 ## 总结
 
 通过本章节的内容，你可以快速获得一个带有流式响应、会话记忆以及 OpenAI 兼容接口的 ReAct 智能体服务。若需部署到远端或扩展更多工具，只需替换 `DashScopeChatModel`、状态服务或工具注册逻辑即可。
+
+## ReActAgent 复用最佳实践
+
+### 问题：每次请求都需要创建新的 ReActAgent 吗？
+
+在 `@agent_app.query(framework="agentscope")` 方法中，**建议每次请求都创建新的 ReActAgent 实例**，而不是复用同一个实例。这是当前推荐的最佳实践，原因如下：
+
+### 为什么要每次创建新实例？
+
+1. **会话隔离性**：每个请求可能来自不同的用户和会话，创建新实例确保不同请求之间的状态完全隔离，避免会话混淆。
+
+2. **状态管理安全**：虽然 AgentScope 提供了 `state_dict()` 和 `load_state_dict()` 来管理状态，但在多并发场景下，复用同一实例可能导致状态竞争和不一致。
+
+3. **内存管理清晰**：每次请求结束后，Python 的垃圾回收机制会自动清理未引用的 Agent 实例，避免内存泄漏。
+
+4. **工具和配置灵活**：不同请求可能需要不同的工具集、提示词或模型配置，创建新实例提供了最大的灵活性。
+
+### 推荐模式：每次请求创建新实例
+
+```python
+@agent_app.query(framework="agentscope")
+async def query_func(self, msgs, request: AgentRequest = None, **kwargs):
+    session_id = request.session_id
+    user_id = request.user_id
+    
+    # 1. 从状态服务加载之前的状态
+    state = await self.state_service.export_state(
+        session_id=session_id,
+        user_id=user_id,
+    )
+    
+    # 2. 每次请求创建新的 Agent 实例
+    agent = ReActAgent(
+        name="Friday",
+        model=DashScopeChatModel(
+            "qwen-turbo",
+            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            enable_thinking=True,
+            stream=True,
+        ),
+        sys_prompt="You're a helpful assistant named Friday.",
+        toolkit=toolkit,
+        memory=AgentScopeSessionHistoryMemory(
+            service=self.session_service,
+            session_id=session_id,
+            user_id=user_id,
+        ),
+        formatter=DashScopeChatFormatter(),
+    )
+    
+    # 3. 如果存在之前的状态，恢复到新实例中
+    if state:
+        agent.load_state_dict(state)
+    
+    # 4. 处理请求
+    async for msg, last in stream_printing_messages(
+        agents=[agent],
+        coroutine_task=agent(msgs),
+    ):
+        yield msg, last
+    
+    # 5. 保存状态供下次使用
+    await self.state_service.save_state(
+        user_id=user_id,
+        session_id=session_id,
+        state=agent.state_dict(),
+    )
+```
+
+### 什么可以复用？
+
+虽然 ReActAgent 实例不应复用，但以下组件**可以且应该**在 `@agent_app.init` 中初始化并复用：
+
+1. **服务实例**：
+   - `StateService`：状态管理服务
+   - `SessionHistoryService`：会话历史服务
+   - `SandboxService`：沙箱服务
+
+2. **长生命周期资源**：
+   - 数据库连接池
+   - Redis 连接
+   - 外部 API 客户端
+
+```python
+@agent_app.init
+async def init_func(self):
+    # ✅ 这些服务应该在初始化时创建并复用
+    self.state_service = InMemoryStateService()
+    self.session_service = InMemorySessionHistoryService()
+    self.sandbox_service = SandboxService()
+    
+    await self.state_service.start()
+    await self.session_service.start()
+    await self.sandbox_service.start()
+```
+
+### 高级场景：Agent 实例池（不推荐）
+
+在某些极端性能优化场景下，你可能考虑实现 Agent 实例池来复用实例。但这需要：
+
+- 实现完善的状态重置机制
+- 处理并发安全问题
+- 实现实例锁定和释放逻辑
+- 额外的复杂度管理
+
+**对于绝大多数应用场景，每次创建新实例的开销是可以接受的**，且能获得更好的代码可维护性和稳定性。
+
+### 性能优化建议
+
+如果担心创建 Agent 实例的性能开销，可以优化：
+
+1. **延迟加载模型**：某些模型 SDK 支持连接池或缓存机制
+2. **优化工具初始化**：工具实例可以预先创建并在多个 Agent 间共享（只读工具）
+3. **使用更快的状态序列化**：优化 `state_dict()` 和 `load_state_dict()` 的性能
+4. **异步初始化**：利用异步特性并行初始化多个组件
+
+### 总结
+
+- ✅ **推荐**：每次 `@agent_app.query()` 调用都创建新的 ReActAgent 实例
+- ✅ **推荐**：在 `@agent_app.init` 中初始化并复用服务实例（StateService、SessionHistoryService、SandboxService）
+- ✅ **推荐**：通过 StateService 在请求间持久化和恢复 Agent 状态
+- ⚠️ **不推荐**：在多个请求间复用同一个 ReActAgent 实例
+- ❌ **避免**：在没有适当状态隔离的情况下跨会话共享 Agent 实例
+
+这种模式确保了会话隔离、状态一致性和代码的可维护性，是 AgentScope Runtime 的推荐实践。
