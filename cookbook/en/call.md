@@ -152,6 +152,53 @@ print(resp.response["output"][0]["content"][0]["text"])
 
 The endpoint reuses the Responses API schema. The `test_openai_compatible_mode` test also confirms that the model replies with its agent name “Friday”.
 
+
+## Controlling Response Streaming
+
+The `/process` endpoint supports both streaming and non-streaming responses via the `stream` parameter:
+
+### Streaming Response (default)
+
+When `stream` is `true` (or not specified), the endpoint returns Server-Sent Events (SSE):
+
+```python
+payload = {
+    "input": [...],
+    "stream": True,  # Optional, this is the default
+}
+# Response will be SSE (text/event-stream)
+```
+
+### Non-Streaming Response
+
+When `stream` is `false`, the endpoint returns a single JSON response containing the complete agent response:
+
+```python
+import aiohttp
+
+url = "http://localhost:8090/process"
+payload = {
+    "input": [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "What is the capital of France?"}],
+        },
+    ],
+    "stream": False,  # Request non-streaming response
+}
+
+async with aiohttp.ClientSession() as session:
+    async with session.post(url, json=payload) as resp:
+        assert resp.status == 200
+        assert resp.headers["Content-Type"].startswith("application/json")
+        
+        # Parse the complete JSON response
+        data = await resp.json()
+        print(data)
+```
+
+The non-streaming response contains the final agent state with all messages in the `output` field.
+
 ## Troubleshooting
 
 - **Cannot connect**: Ensure the service is running, the port is free, and the client targets the correct host (especially in containers or remote deployments).
