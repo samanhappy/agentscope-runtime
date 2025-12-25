@@ -430,8 +430,14 @@ class FastAPIAppFactory:
             """
             Agent API endpoint, see
             <https://runtime.agentscope.io/en/protocol.html> for more details.
+            
+            Args:
+                request: The parsed request body as a dictionary. FastAPI
+                    automatically parses the JSON body and passes it here.
             """
             # Check if streaming is requested (default is True)
+            # The 'stream' field is a top-level parameter in the AgentRequest
+            # schema, just like 'input', 'session_id', etc.
             stream = request.get("stream", True)
             
             if stream:
@@ -644,6 +650,9 @@ class FastAPIAppFactory:
                 return {"response": result}
             else:
                 # Collect all streaming events and return the final response
+                # The runner.stream_query generates events incrementally, and
+                # the final event contains the complete agent state with all
+                # messages. We iterate through all events to ensure completion.
                 last_event = None
                 async for chunk in runner.stream_query(request):
                     last_event = chunk

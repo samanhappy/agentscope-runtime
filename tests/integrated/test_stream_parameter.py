@@ -165,7 +165,7 @@ async def test_process_endpoint_stream_true(start_app):
 
                 line = chunk.decode("utf-8").strip()
                 if line.startswith("data:"):
-                    data_str = line[len("data:") :].strip()
+                    data_str = line[len("data:"):].strip()
                     if data_str == "[DONE]":
                         break
 
