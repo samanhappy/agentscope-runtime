@@ -154,6 +154,53 @@ print(resp.response["output"][0]["content"][0]["text"])
 
 该接口完全复用了 Responses API 的返回格式，测试用例 `test_openai_compatible_mode` 也验证了模型会自报家门为 “Friday”。
 
+
+## 控制响应流式输出
+
+`/process` 端点通过 `stream` 参数支持流式和非流式两种响应模式：
+
+### 流式响应（默认）
+
+当 `stream` 为 `true`（或未指定时），端点返回服务器发送事件（SSE）：
+
+```python
+payload = {
+    "input": [...],
+    "stream": True,  # 可选，这是默认值
+}
+# 响应将是 SSE 格式 (text/event-stream)
+```
+
+### 非流式响应
+
+当 `stream` 为 `false` 时，端点返回包含完整代理响应的单个 JSON 对象：
+
+```python
+import aiohttp
+
+url = "http://localhost:8090/process"
+payload = {
+    "input": [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "法国的首都是什么？"}],
+        },
+    ],
+    "stream": False,  # 请求非流式响应
+}
+
+async with aiohttp.ClientSession() as session:
+    async with session.post(url, json=payload) as resp:
+        assert resp.status == 200
+        assert resp.headers["Content-Type"].startswith("application/json")
+        
+        # 解析完整的 JSON 响应
+        data = await resp.json()
+        print(data)
+```
+
+非流式响应包含最终的代理状态，所有消息都在 `output` 字段中。
+
 ## 常见排查
 
 - **无法连接**：确认服务仍在运行、端口未被占用，并检查客户端是否访问了正确的主机（容器或远程部署时尤为重要）。

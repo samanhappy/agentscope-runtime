@@ -430,18 +430,36 @@ class FastAPIAppFactory:
             """
             Agent API endpoint, see
             <https://runtime.agentscope.io/en/protocol.html> for more details.
+            
+            Args:
+                request: The parsed request body as a dictionary. FastAPI
+                    automatically parses the JSON body and passes it here.
             """
-            return StreamingResponse(
-                FastAPIAppFactory._create_stream_generator(
+            # Check if streaming is requested (default is True)
+            # The 'stream' field is a top-level parameter in the AgentRequest
+            # schema, just like 'input', 'session_id', etc.
+            stream = request.get("stream", True)
+            
+            if stream:
+                # Return streaming response
+                return StreamingResponse(
+                    FastAPIAppFactory._create_stream_generator(
+                        app,
+                        request=request,
+                    ),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                    },
+                )
+            else:
+                # Return non-streaming JSON response
+                response = await FastAPIAppFactory._collect_agent_response(
                     app,
                     request=request,
-                ),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                },
-            )
+                )
+                return JSONResponse(content=response)
 
         # # Standard endpoint
         # @app.post(endpoint_path)
@@ -599,6 +617,66 @@ class FastAPIAppFactory:
 
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    @staticmethod
+    async def _collect_agent_response(
+        app: FastAPI,
+        request: dict,
+    ) -> Dict[str, Any]:
+        """
+        Collect agent response in non-streaming mode.
+        
+        Args:
+            app: FastAPI application instance
+            request: Request dictionary
+            
+        Returns:
+            Dictionary containing the final agent response
+        """
+        try:
+            runner = FastAPIAppFactory._get_runner_instance(app)
+            if not runner:
+                return {
+                    "error": "Runner not initialized",
+                    "status": "failed",
+                }
+
+            if app.state.custom_func:
+                # Handle custom function
+                result = await FastAPIAppFactory._call_custom_function(
+                    app.state.custom_func,
+                    request,
+                )
+                return {"response": result}
+            else:
+                # Collect all streaming events and return the final response
+                # The runner.stream_query generates events incrementally, and
+                # the final event contains the complete agent state with all
+                # messages. We iterate through all events to ensure completion.
+                last_event = None
+                async for chunk in runner.stream_query(request):
+                    last_event = chunk
+                
+                # Return the last event as the final response
+                if last_event:
+                    if hasattr(last_event, "model_dump"):
+                        return last_event.model_dump(exclude_none=True)
+                    elif hasattr(last_event, "dict"):
+                        return last_event.dict()
+                    else:
+                        return {"response": str(last_event)}
+                else:
+                    return {
+                        "error": "No response generated",
+                        "status": "failed",
+                    }
+
+        except Exception as e:
+            logger.error(f"Error in non-streaming response: {e}")
+            return {
+                "error": str(e),
+                "status": "failed",
+            }
 
     @staticmethod
     async def _collect_stream_response(runner, request: dict) -> str:
