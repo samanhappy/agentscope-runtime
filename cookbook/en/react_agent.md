@@ -266,3 +266,128 @@ A successful result should look like “I'm Friday ...”.
 ## Summary
 
 Following these steps, you now have a ReAct agent with streaming responses, session memory, browser sandbox tooling, and an OpenAI-compatible endpoint. To deploy remotely or extend the toolset, swap out the model, state services, or registered tools as needed.
+
+## ReActAgent Reuse Best Practices
+
+### Question: Should I Create a New ReActAgent for Every Request?
+
+In the `@agent_app.query(framework="agentscope")` method, it is **recommended to create a new ReActAgent instance for each request** rather than reusing the same instance. This is the current best practice for the following reasons:
+
+### Why Create a New Instance Each Time?
+
+1. **Session Isolation**: Each request may come from different users and sessions. Creating new instances ensures complete state isolation between different requests, avoiding session confusion.
+
+2. **State Management Safety**: Although AgentScope provides `state_dict()` and `load_state_dict()` for state management, reusing the same instance in multi-concurrent scenarios may lead to state races and inconsistencies.
+
+3. **Clear Memory Management**: After each request ends, Python's garbage collection mechanism automatically cleans up unreferenced Agent instances, preventing memory leaks.
+
+4. **Flexibility in Tools and Configuration**: Different requests may require different toolsets, prompts, or model configurations. Creating new instances provides maximum flexibility.
+
+### Recommended Pattern: Create New Instance Per Request
+
+```python
+@agent_app.query(framework="agentscope")
+async def query_func(self, msgs, request: AgentRequest = None, **kwargs):
+    session_id = request.session_id
+    user_id = request.user_id
+    
+    # 1. Load previous state from state service
+    state = await self.state_service.export_state(
+        session_id=session_id,
+        user_id=user_id,
+    )
+    
+    # 2. Create a new Agent instance for each request
+    agent = ReActAgent(
+        name="Friday",
+        model=DashScopeChatModel(
+            "qwen-turbo",
+            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            enable_thinking=True,
+            stream=True,
+        ),
+        sys_prompt="You're a helpful assistant named Friday.",
+        toolkit=toolkit,
+        memory=AgentScopeSessionHistoryMemory(
+            service=self.session_service,
+            session_id=session_id,
+            user_id=user_id,
+        ),
+        formatter=DashScopeChatFormatter(),
+    )
+    
+    # 3. Restore previous state to the new instance if it exists
+    if state:
+        agent.load_state_dict(state)
+    
+    # 4. Process the request
+    async for msg, last in stream_printing_messages(
+        agents=[agent],
+        coroutine_task=agent(msgs),
+    ):
+        yield msg, last
+    
+    # 5. Save state for next use
+    await self.state_service.save_state(
+        user_id=user_id,
+        session_id=session_id,
+        state=agent.state_dict(),
+    )
+```
+
+### What Can Be Reused?
+
+Although ReActAgent instances should not be reused, the following components **can and should** be initialized in `@agent_app.init` and reused:
+
+1. **Service Instances**:
+   - `StateService`: State management service
+   - `SessionHistoryService`: Session history service
+   - `SandboxService`: Sandbox service
+
+2. **Long-Lived Resources**:
+   - Database connection pools
+   - Redis connections
+   - External API clients
+
+```python
+@agent_app.init
+async def init_func(self):
+    # ✅ These services should be created during initialization and reused
+    self.state_service = InMemoryStateService()
+    self.session_service = InMemorySessionHistoryService()
+    self.sandbox_service = SandboxService()
+    
+    await self.state_service.start()
+    await self.session_service.start()
+    await self.sandbox_service.start()
+```
+
+### Advanced Scenario: Agent Instance Pool (Not Recommended)
+
+In some extreme performance optimization scenarios, you might consider implementing an Agent instance pool to reuse instances. However, this requires:
+
+- Implementing a complete state reset mechanism
+- Handling concurrency safety issues
+- Implementing instance locking and release logic
+- Additional complexity management
+
+**For the vast majority of application scenarios, the overhead of creating a new instance each time is acceptable** and provides better code maintainability and stability.
+
+### Performance Optimization Suggestions
+
+If you're concerned about the performance overhead of creating Agent instances, you can optimize:
+
+1. **Lazy Load Models**: Some model SDKs support connection pooling or caching mechanisms
+2. **Optimize Tool Initialization**: Tool instances can be pre-created and shared across multiple Agents (read-only tools)
+3. **Use Faster State Serialization**: Optimize the performance of `state_dict()` and `load_state_dict()`
+4. **Async Initialization**: Leverage async features to initialize multiple components in parallel
+
+### Summary
+
+- ✅ **Recommended**: Create a new ReActAgent instance for each `@agent_app.query()` call
+- ✅ **Recommended**: Initialize and reuse service instances (StateService, SessionHistoryService, SandboxService) in `@agent_app.init`
+- ✅ **Recommended**: Persist and restore Agent state across requests using StateService
+- ⚠️ **Not Recommended**: Reuse the same ReActAgent instance across multiple requests
+- ❌ **Avoid**: Sharing Agent instances across sessions without proper state isolation
+
+This pattern ensures session isolation, state consistency, and code maintainability, and is the recommended practice for AgentScope Runtime.
