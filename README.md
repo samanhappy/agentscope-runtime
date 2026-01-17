@@ -455,6 +455,7 @@ After the server starts, you can access the sandbox server at baseurl `http://lo
 - **[🚀 Quick Start](https://runtime.agentscope.io/en/quickstart.html)**: Quick start tutorial
 - **[🏠 Demo House](https://runtime.agentscope.io/en/demohouse.html)**: Rich example projects
 - **[📋 API Reference](https://runtime.agentscope.io/en/api/index.html)**: Complete API documentation
+- **[🤖 Multi-Agent Best Practices](cookbook/en/best_practices_multi_agent.md)**: Best practices for deploying multiple agents
 
 ---
 

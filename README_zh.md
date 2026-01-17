@@ -459,6 +459,7 @@ runtime-sandbox-server --config fc.env
 - **[🚀 快速开始](https://runtime.agentscope.io/zh/quickstart.html)**: 快速入门教程
 - **[🏠 展示厅](https://runtime.agentscope.io/zh/demohouse.html)**: 丰富的示例项目
 - **[📋 API 参考](https://runtime.agentscope.io/zh/api/index.html)**: 完整的API文档
+- **[🤖 多智能体部署最佳实践](cookbook/zh/best_practices_multi_agent.md)**: 部署多个智能体的最佳实践
 
 ---
 
